@@ -1,0 +1,175 @@
+---
+title: "Human Activity Recognition Project (Machine Learning)"
+author: "Irina White"
+date: "25/06/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning=FALSE)
+library(dplyr)
+library(knitr)
+```
+## PROJECT QUESTION
+The goal of the project is to predict the manner in which the participants did the exercise. 
+Furthermore, data is split into two sets for training and testing purposes.
+After the initial data overview and preparation the machine learning algorithm is applied to obtain satisfying level of performance first on the training set and further on the test set.
+
+## DATA OVERVIEW
+The data for this project has been obtained from this source: [http://groupware.les.inf.puc-rio.br/har].
+"Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions[1](http://groupware.les.inf.puc-rio.br/har#dataset#ixzz6ynveTYJw): 
+Class A - exactly according to the specification
+Class B - throwing the elbows to the front
+Class C - lifting the dumbbell only halfway
+Class D - lowering the dumbbell only halfway
+Class E - throwing the hips to the front
+The training set was downloaded from [Training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+The testing set was download from [Testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+```{r}
+URL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(URL,destfile="TrainData.csv", method="curl")
+training<-read.csv("TrainData.csv")
+URL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(URL,destfile="TestData.csv", method="curl")
+testing<-read.csv("TestData.csv")
+```
+
+First seven columns are not the valued data for the project as it includes user names, time stamps, etc. Therefore dataframe is adjusted to the useful variables.
+```{r}
+training<-training[,-c(1:7)]
+testing<-testing[,-c(1:7)]
+
+#Extract the names of the columns which are different in testing and training sets.
+k<-colnames(training)!=colnames(testing)
+
+names(training[k]); names(testing[k]);
+```
+
+```{r}
+#removing the problem_id column from the test set and setting outcome column in train set as factors.
+testing<-testing[,-length(testing)]
+training$classe<-as.factor(training$classe)
+```
+
+## DATA PREPARATION
+Null values inspection
+```{r}
+val<-apply(X=training, MARGIN = 2, FUN=function(x) sum(is.na(x)))
+unique(val[val>0]); round((unique(val[val>0]))/dim(training)[1],2); length(val[val>0])
+```
+Therefore, there are 67 columns with the NA values with 98% of the data missing in those columns.
+
+```{r}
+head(training[,c(1,9:12)], 3)
+
+```
+
+However, through observation of the dataframe, it was also noted that some columns have empty entries instead of NA entries. To account for that the further empty to NA conversion step is used.
+```{r}
+training<-mutate_all(training, list(~na_if(.,"")))
+val<-apply(X=training, MARGIN = 2, FUN=function(x) sum(is.na(x)))
+unique(val[val>0]); round((unique(val[val>0]))/dim(training)[1],2); length(val[val>0])
+```
+This allow us to see that overall there are 100 columns in the data set that have 98% of data missing. For the purpose of this project it will be beneficial to readjust the dataset and eliminate variables that contain only 2% of the valuable information.The useful dataset will consists of 53 variables for further application.
+It is also not practical to impute any missing values as 2% is a significantly little number to use for the missing values.
+
+```{r}
+training<-(training[val==0])
+dim(training)
+```
+
+## BUILDING MODEL
+
+As there are large number of cases given with the large number of variables it might be beneficial to split training set even further to training and validation sets. For CARET package is going to be used for further model building.
+
+First, find highly correlated variables to further simplify the model.
+For the visualization plot see the Appendix (1).
+``` {r}
+library(caret)
+correl<-findCorrelation(cor(training[,-53], use="pairwise.complete.obs"), cutoff = 0.75, verbose = FALSE )
+names(training[correl])
+```
+For further variables reduction the cutoff is going to be set to 90% and the fitted variables will be removed from the model building process.
+``` {r}
+highcorrel<-findCorrelation(cor(training[,-53], use="pairwise.complete.obs"), cutoff = 0.90, verbose = FALSE )
+names(training[highcorrel])
+training<-training[,-highcorrel]
+```
+
+### *Splitting data into training set and test-validation set*
+```{r}
+set.seed(373)
+inTrain<-createDataPartition(y=training$classe, p=0.75, list=FALSE)
+train<-training[inTrain,]
+valid<-training[-inTrain,]
+dim(train); dim(valid)
+```
+Developing the Decision Tree (rpart), Random Forest (rf) and Stochastic Gradient Boosting Models on the train part of the training data; followed by application on the validation set.
+```{r, results='hide'}
+set.seed(375)
+modrpart<-train(classe~., method='rpart', data=train)
+predrpart<-predict(modrpart, newdata=valid)
+
+library(randomForest)
+modrf<-randomForest(classe~., data=train, importance = TRUE, ntrees = 5, type='responce')
+predrf<-predict(modrpart, valid)
+
+modgbm<-train(classe~., method='gbm', data=train)
+predgbm<- predict(modgbm, valid)
+      
+```
+
+### Confusion Matrices and Accuracy Levels
+**Decision Tree**
+```{r}
+rpart<-confusionMatrix(valid$classe, predrpart)
+rpart
+```
+
+**GBM**
+```{r}
+gbm<-confusionMatrix(valid$classe, predgbm)
+gbm
+```
+
+**Random Forest**
+```{r}
+rf<-confusionMatrix(valid$classe, predrf)
+rf
+```
+
+Therefore, the overall accuracy summary is as follows, with the GBM method showing the highest levels.
+``` {r}
+cbind(c('RPART', 'GBM', 'RF'), round(c(rpart$overall['Accuracy'], gbm$overall['Accuracy'], rf$overall['Accuracy']),3))
+```
+
+## Use GBM method on testing data set
+
+```{r}
+predtest <- predict(modgbm, testing)
+testing$classe <- predtest
+predtest
+```
+
+
+# APPENDIX
+(1) Plotting correlated predictors
+``` {r}
+library(corrplot)
+corMat <- cor(train[, -46])
+corrplot(corMat, order = "FPC", method = "color", type = "upper", 
+         tl.cex = 0.5, tl.col = rgb(0, 0, 0))
+
+
+
+```
+
+(2) The random tree model
+``` {r}
+library(rattle)
+fancyRpartPlot(modrpart$finalModel)
+
+```
+
+
